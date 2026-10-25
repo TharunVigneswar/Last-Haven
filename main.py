@@ -82,6 +82,7 @@ selected_building = None
 alert = None
 alert_title = ""
 alert_color = RED
+choice_event = None
 buttons = []
 mouse_logical_pos = (0, 0)
 
@@ -159,6 +160,79 @@ def set_alert(title, value, color=RED):
     alert_title = title
     alert = value
     alert_color = color
+
+def set_choice_event(title, description, choices):
+    global choice_event, alert, alert_title, alert_color
+
+    choice_event = {
+        "title": title,
+        "description": description,
+        "choices": choices
+    }
+
+    alert = description
+    alert_title = title
+    alert_color = CYAN
+
+def handle_event_choice(choice):
+    global health, morale, alert, choice_event
+
+    choice_event = None
+    alert = None
+
+    if choice == "investigate":
+        if random.random() < 0.6:
+            resources["Scrap"] += 8
+            add_log(
+                "Your scouts found a hidden supply cache. Scrap +8",
+                "success"
+            )
+            set_alert(
+                "SIGNAL INVESTIGATED",
+                "Your scouts found a hidden supply cache. Scrap +8",
+                GREEN
+            )
+        else:
+            health = max(0, health - 6)
+            add_log(
+                "The signal was a trap. Health -6.",
+                "danger"
+            )
+            set_alert(
+                "SCOUTS AMBUSHED",
+                "The signal was a trap. Your scouts returned injuired. Health -6.",
+                RED
+            )
+    elif choice == "trade_scrap":
+        if resources["Scrap"] >= 5:
+            resources["Scrap"] -= 5
+            resources["Food"] += 10
+            add_log("You traded 5 scrap for 10 food.", "success")
+            set_alert(
+                "TRADE COMPLETED",
+                "The contact sent 10 Food in exchange for 5 Scrap.",
+                GREEN
+            )
+        else:
+            set_alert(
+                "NOT ENOUGH SCRAP",
+                "You need 5 Scrap to complete this trade.",
+                YELLOW
+            )
+    elif choice == "ignore_signal":
+        morale = min(100, morale + 3)
+        add_log(
+            "The colony ignored the signal. Morale +3",
+            "normal"
+        )
+        set_alert(
+            "SIGNAL IGNORED",
+            "You avoided the risk of sending out scouts. Morale +3",
+            CYAN
+        )
+
+    check_game_over()
+    
 
 def notify(value, category="normal"):
     add_log(value, category)
@@ -488,7 +562,19 @@ def random_event():
 
     event = random.random()
 
-    if event < 0.1: #severe storm
+    if event < 0.08: #chioce pick
+        set_choice_event(
+            "UNKNOWN RADIO SIGNAL",
+            "A mysterious transmission is coming from beyond the ruins. "
+            "Your scouts are waiting for your decision.",
+            [
+                ("Investigate", "event_choice:investigate"),
+                ("Trade 5 Scrap", "event_choice:trade_scrap"),
+                ("Ignore Signal", "event_choice:ignore_signal")
+            ]
+        )
+        return
+    elif event < 0.15: #severe storm
         defences = sum(
             1 for b in buildings.values() if b == "Defences"
         )
@@ -499,11 +585,12 @@ def random_event():
             "danger"
         ) 
 
-    elif event < 0.20: #raid
+    elif event < 0.22: #raid
         defences = sum(
             1 for b in buildings.values() if b == "Defences"
         )
-        damage = max(0, 12 - defences * 4)
+        guards = survivor_roles.get("Guards", 0)
+        damage = max(0, 12 - defences * 4 - guards * 2)
         lost = min(resources["Food"], random.randint(2, 8))
         resources["Food"] -= lost
         health = max(0, health - damage)
@@ -519,12 +606,12 @@ def random_event():
                 "danger"
             )
 
-    elif event < 0.28: #illness
+    elif event < 0.30: #illness
         health = max(0, health - 7)
         notify("Illness spread through the colony. Health -7.", "danger")
 
     elif event < 0.39: #suply drop
-        item = random.choice(["Food", "Water", "Wood", "scrap"])
+        item = random.choice(["Food", "Water", "Wood", "Scrap"])
         amt = random.randint(8, 15)
         resources[item] += amt
         notify(
@@ -754,13 +841,35 @@ def draw_left_panel():
 def terrain_color(x, y):
     value = (x * 13 + y * 7 + x * y * 3) % 5
     greens = [
-        (70, 111, 72),
-        (74, 116, 75),
-        (78, 119, 78),
-        (68, 108, 71),
-        (82, 121, 78)
+        (38, 65, 43),
+        (42, 69, 46),
+        (45, 72, 48),
+        (36, 61, 41),
+        (48, 74, 47)
     ]
-    return greens[value]
+
+    r, g, b = greens[value]
+
+    for (fx, fy), name in buildings.items():
+        if name != "Campfire":
+            continue
+
+        distance = math.sqrt((x - fx) ** 2 + (y - fy) ** 2)
+
+        radius = 3.5
+
+        if distance < radius:
+            strength = (1 - distance / radius) ** 1.5
+
+            r += int(65 * strength)
+            g += int(36 * strength)
+            b += int(7 * strength)
+
+    return (
+        min(255, r),
+        min(255, g),
+        min(255, b)
+    )
 
 def draw_tree(rect):
     cx, cy = rect.centerx, rect.centery
@@ -1324,7 +1433,11 @@ def draw_alert():
     overlay.fill((0, 0, 0, 175))
     screen.blit(overlay, (0, 0))
 
-    rect = pygame.Rect(360, 275, 560, 245)
+    if choice_event is not None:
+        rect = pygame.Rect(300, 240, 680, 320)
+    else:
+        rect = pygame.Rect(360, 275, 560, 245)
+    
     pygame.draw.rect(screen, PANEL, rect, border_radius=16)
     pygame.draw.rect(screen, alert_color, rect, 2, border_radius=16)
 
@@ -1335,11 +1448,38 @@ def draw_alert():
     for i, line in enumerate(lines[:3]):
         text(screen, line, rect.x + 30, rect.y + 126 + i * 23, FONT, WHITE)
 
-    draw_button(pygame.Rect(rect.right - 145, rect.bottom - 55, 115, 38),
-                "CONTINUE", "dismiss", PANEL_LIGHT, alert_color)
+    if choice_event is not None:
+        choices = choice_event["choices"]
+        button_width = 190
+        gap = 15
+        total_width = len(choices) * button_width + (len(choices) - 1) * gap
+        start_x = rect.centerx - total_width // 2
+
+        for i, (label, action) in enumerate(choices):
+            button_rect = pygame.Rect(
+                start_x + i * (button_width + gap),
+                rect.bottom - 60,
+                button_width,
+                40
+            )
+            draw_button(
+                button_rect,
+                label,
+                action,
+                PANEL_LIGHT,
+                alert_color
+            )
+    else:
+        draw_button(
+            pygame.Rect(rect.right - 145, rect.bottom - 55, 155, 38),
+            "CONTINUE",
+            "dismiss",
+            PANEL_LIGHT,
+            alert_color
+        )
 
 def handle_action(action):
-    global page, selected_building, alert, game_mode, survival_goal
+    global page, selected_building, alert, game_mode, survival_goal, choice_event
 
     if action == "choose_mode":
         page = "mode_select"
@@ -1364,6 +1504,11 @@ def handle_action(action):
 
     elif action == "dismiss":
         alert = None
+        choice_event = None
+
+    elif action.startswith("event_choice:"):
+        choice = action.split(":", 1)[1]
+        handle_event_choice(choice)
 
     elif action == "cancel_build":
         selected_building = None
@@ -1457,7 +1602,7 @@ def main():
                 if event.button == 1:
                     if alert is not None:
                         for rect, action in reversed(buttons):
-                            if action == "dismiss" and rect.collidepoint(click_pos):
+                            if rect.collidepoint(click_pos):
                                 handle_action(action)
                                 break
                     else:
